@@ -34,26 +34,30 @@ pyroutils.MIN_CHANNEL_ID = -100999999999999
 
 from plugins.webcode import bot_run
 
-PORT_CODE = environ.get("PORT", "8080")
+# Render & Koyeb auto port binding
+PORT_CODE = int(environ.get("PORT", "8080"))
 
-
-# ✅ Add this block
 async def preload_auth_channels():
     if not await db.get_auth_channels():
         await db.set_auth_channels(DEFAULT_AUTH_CHANNELS)
         logging.info("Set default AUTH_CHANNELs in DB.")
 
 async def keep_alive():
-    """Send a request every 111 seconds to keep the bot alive (if required)."""
+    """Send a request every 5 minutes to prevent Render/Koyeb sleeping"""
+    await asyncio.sleep(30) # Bot server poorthi start aago varege wait madalu
     async with aiohttp.ClientSession() as session:
         while True:
-            try:
-                await session.get(KEEP_ALIVE_URL)
-                logging.info("Sent keep-alive request.")
-            except Exception as e:
-                logging.error(f"Keep-alive request failed: {e}")
-            await asyncio.sleep(111)
-
+            url = environ.get("KEEP_ALIVE_URL", KEEP_ALIVE_URL)
+            if url and url.startswith("http"):
+                try:
+                    async with session.get(url, timeout=10) as resp:
+                        logging.info(f"Keep-alive ping sent to {url} | Status: {resp.status}")
+                except Exception as e:
+                    logging.error(f"Keep-alive request failed: {e}")
+            else:
+                logging.warning("KEEP_ALIVE_URL set agilla athava invalid ide.")
+            # 5 minutes (300 seconds) ge ondsala ping maduthe
+            await asyncio.sleep(300)
 
 class Bot(Client):
 
@@ -87,14 +91,11 @@ class Bot(Client):
         temp.B_NAME = me.first_name
         self.username = '@' + me.username
 
-        # ✅ preload auth channels from info.py if DB is empty
         await preload_auth_channels()
 
         logging.info(f"{me.first_name} running on Pyrogram v{__version__} (Layer {layer}) started on {me.username}.")
         logging.info(LOG_STR)
         await self.send_message(chat_id=LOG_CHANNEL, text=script.RESTART_TXT)
-
-        print("mntg4u</>")
 
         tz = pytz.timezone('Asia/Kolkata')
         today = date.today()
@@ -102,13 +103,17 @@ class Bot(Client):
         time = now.strftime("%H:%M:%S %p")
         await self.send_message(chat_id=LOG_CHANNEL, text=script.RESTART_GC_TXT.format(today, time))
 
+        # Background 24/7 tasks
         asyncio.create_task(self.kulasthree())
         asyncio.create_task(keep_alive())
 
-        client = webserver.AppRunner(await bot_run())
+        # Web server binding for Render / Koyeb
+        app = await bot_run()
+        client = webserver.AppRunner(app)
         await client.setup()
-        bind_address = "0.0.0.0"
-        await webserver.TCPSite(client, bind_address, PORT_CODE).start()
+        site = webserver.TCPSite(client, "0.0.0.0", PORT_CODE)
+        await site.start()
+        logging.info(f"Web server successfully bound to port {PORT_CODE}")
 
     async def stop(self, *args):
         await super().stop()
@@ -129,7 +134,6 @@ class Bot(Client):
             for message in messages:
                 yield message
                 current += 1
-
 
 app = Bot()
 app.run()
